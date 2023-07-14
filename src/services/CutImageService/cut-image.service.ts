@@ -7,7 +7,8 @@ import { getPreviewImageWidth, getFaceNameByFileName } from 'src/utils';
 import * as sharp from 'sharp';
 import * as FormData from 'form-data';
 import { IErrorLog } from 'src/models/IErrorLog';
-
+import { writeFile } from 'fs';
+const TILE_SIZE = 512;
 export class CutImageService {
   logger: LoggerService;
   axios: AxiosService;
@@ -48,7 +49,8 @@ export class CutImageService {
     interpolation: 'lanczos',
     outformat: 'jpg',
     outtype: 'buffer',
-    width: Infinity,
+    // width: Infinity,
+    width: 1024,
   };
 
   cutImage(): Promise<string> {
@@ -103,7 +105,7 @@ export class CutImageService {
 
   createPreviewImage() {
     return new Promise((resolve, reject) => {
-      const previewImageWidth = getPreviewImageWidth(this.titleSize);
+      // const previewImageWidth = getPreviewImageWidth(this.titleSize);
       const imageOrder = 'bdflru';
       const listImageResized = [];
       const onResized = (imageResizedBufferType, rawImage) => {
@@ -120,8 +122,13 @@ export class CutImageService {
               (x) => x.filename === charValue,
             );
             orderedImages.push(imageMatch);
-          });
 
+            listImageResized.forEach((img) => {
+              writeFile(`/preview/${img.filename}.webp`, img.buffer, () => {
+                console.log('saved: ', `${img.filename}.webp`);
+              });
+            });
+          });
           // const composeImages = orderedImages.map((file, fileIndex) => {
           //   return {
           //     input: file.buffer,
@@ -129,7 +136,6 @@ export class CutImageService {
           //     left: 0,
           //   };
           // });
-
           resolve(null);
 
           // const createConfig = {
@@ -156,8 +162,8 @@ export class CutImageService {
       this.facesImage.map((faceImage) => {
         sharp(faceImage.buffer)
           .resize({
-            width: previewImageWidth,
-            height: previewImageWidth,
+            width: TILE_SIZE,
+            height: TILE_SIZE,
           })
           .toBuffer()
           .then((resultBuffer) => {
@@ -172,20 +178,20 @@ export class CutImageService {
     return new Promise(async (resolve, reject) => {
       try {
         this.logger.log(`Create 360 preview`);
-        const response = await this.axios.get(this.panoramaPreviewImgUrlRaw, {
-          responseType: 'arraybuffer',
-        });
-        const fileData: Buffer = response.data;
-        const previewBuffer = await sharp(fileData)
-          .resize({ width: 800, height: 418 })
-          .webp()
-          .toBuffer();
-        const fileName = `panorama_${this.roomId}_preview.webp`;
+        // const response = await this.axios.get(this.panoramaPreviewImgUrlRaw, {
+        //   responseType: 'arraybuffer',
+        // });
+        // const fileData: Buffer = response.data;
+        // const previewBuffer = await sharp(fileData)
+        //   .resize({ width: 800, height: 418 })
+        //   .webp()
+        //   .toBuffer();
+        // const fileName = `panorama_${this.roomId}_preview.webp`;
         this.logger.log(`Upload 360 preview`);
-        this.panoramaPreviewImgUrl = await this.uploadFile(
-          previewBuffer,
-          fileName,
-        );
+        // this.panoramaPreviewImgUrl = await this.uploadFile(
+        //   previewBuffer,
+        //   fileName,
+        // );
         this.logger.log(`Upload 360 preview completed`);
         resolve(null);
       } catch (e) {
@@ -211,7 +217,8 @@ export class CutImageService {
   }
 
   createTitleImages() {
-    const imagesOneRow = this.faceSize / this.titleSize;
+    // const imagesOneRow = this.faceSize / this.titleSize;
+    const imagesOneRow = 2;
     const titleIndexMax = imagesOneRow - 1;
     this.titleImagesCount = imagesOneRow * imagesOneRow * 6;
     return new Promise((resolve, reject) => {
