@@ -3,12 +3,20 @@ import { AxiosService } from 'src/services/Axios/axios.service';
 import imageSizeOf from 'image-size';
 import { convertImage } from 'src/libs/panorama-to-cubemap';
 import { ICubeImage } from 'src/models/ICubeImage';
-import { getPreviewImageWidth, getFaceNameByFileName } from 'src/utils';
+import { getFaceNameByFileName } from 'src/utils';
 import * as sharp from 'sharp';
 import * as FormData from 'form-data';
 import { IErrorLog } from 'src/models/IErrorLog';
-import { writeFile } from 'fs';
+import { writeFile, existsSync, mkdirSync } from 'fs';
+import { join } from 'path';
 const TILE_SIZE = 512;
+const FOLDER_PATHS = __dirname.split('\\').slice(0, -2);
+const IMAGE_FOLDER = join(...FOLDER_PATHS, 'images');
+if (!existsSync(IMAGE_FOLDER)) {
+  mkdirSync(IMAGE_FOLDER);
+}
+const getPathSaved = (fileName: string) =>
+  join(...FOLDER_PATHS, 'images', fileName);
 export class CutImageService {
   logger: LoggerService;
   axios: AxiosService;
@@ -17,6 +25,9 @@ export class CutImageService {
   originalWidth: number;
   originalHeight: number;
   facesImage: ICubeImage[];
+  facesImageResized: ICubeImage[];
+  facesImage1024: ICubeImage[];
+  facesImage2048: ICubeImage[];
   roomId: string | number;
   titleSize: number;
   faceSize: number;
@@ -49,17 +60,16 @@ export class CutImageService {
     interpolation: 'lanczos',
     outformat: 'jpg',
     outtype: 'buffer',
-    // width: Infinity,
-    width: 1024,
+    width: Infinity,
   };
 
   cutImage(): Promise<string> {
+    console.log(__dirname);
     return new Promise(async (resolve, reject) => {
       const imageUrl = this.imageUrl;
       this.logger.log(`Start convert image: ${this.imageUrlRaw}`);
       try {
         const startTime = new Date();
-        await this.createAndUpload360PreviewImage();
         const response = await this.axios.get(imageUrl, {
           responseType: 'arraybuffer',
         });
@@ -69,24 +79,31 @@ export class CutImageService {
         this.originalWidth = dimension.width;
         this.originalHeight = dimension.height;
         this.isImageRatioCorrect();
-        this.createFaceSizeTitleSize();
         this.facesImage = await convertImage(fileData, this.options);
+        this.facesImage1024 = await this.resizeFaceImages(1024);
+        this.facesImage2048 = await this.resizeFaceImages(2048);
         this.logger.log(`Convert panaroma to cube image completed`);
         await this.createPreviewImage();
-        await this.uploadPreviewImage();
-        await this.createTitleImages();
-        const jsonResult = this.getImageJson();
+        await this.createTitleImages({
+          facesImages: this.facesImage1024,
+          layerIndex: 1,
+          faceSize: 1024,
+        });
+        await this.createTitleImages({
+          facesImages: this.facesImage2048,
+          layerIndex: 2,
+          faceSize: 2048,
+        });
         const currentTime = new Date();
         this.logger.log(
           `Convert image completed in ${
             (currentTime.getTime() - startTime.getTime()) / 1000
           }s`,
         );
-        resolve(jsonResult);
+        resolve('done');
       } catch (e) {
         this.logger.error(`Convert image error: ${imageUrl}`);
         this.logger.error(e);
-        this.sendEmailInformError(e);
         reject(e);
       }
     });
@@ -102,133 +119,68 @@ export class CutImageService {
     }
     this.logger.log(`Image dimension correct.`);
   }
-
-  createPreviewImage() {
-    return new Promise((resolve, reject) => {
-      // const previewImageWidth = getPreviewImageWidth(this.titleSize);
-      const imageOrder = 'bdflru';
-      const listImageResized = [];
-      const onResized = (imageResizedBufferType, rawImage) => {
-        const faceImageName = getFaceNameByFileName(rawImage.filename);
-        listImageResized.push({
-          filename: faceImageName,
-          buffer: imageResizedBufferType,
-        });
-        const isAllFacesResized = listImageResized.length === 6;
-        if (isAllFacesResized) {
-          const orderedImages = [];
-          imageOrder.split('').map((charValue) => {
-            const imageMatch = listImageResized.find(
-              (x) => x.filename === charValue,
-            );
-            orderedImages.push(imageMatch);
-
-            listImageResized.forEach((img) => {
-              writeFile(`/preview/${img.filename}.webp`, img.buffer, () => {
-                console.log('saved: ', `${img.filename}.webp`);
-              });
-            });
-          });
-          // const composeImages = orderedImages.map((file, fileIndex) => {
-          //   return {
-          //     input: file.buffer,
-          //     top: fileIndex * previewImageWidth,
-          //     left: 0,
-          //   };
-          // });
-          resolve(null);
-
-          // const createConfig = {
-          //   create: {
-          //     width: previewImageWidth,
-          //     height: previewImageWidth * 6,
-          //     channels: 4,
-          //     background: { r: 255, g: 0, b: 0, alpha: 0.5 },
-          //   },
-          // };
-
-          //   sharp(createConfig)
-          //     .composite(composeImages)
-          //     .webp()
-          //     .toBuffer()
-          //     .then((bufferImage: Buffer) => {
-          //       this.logger.log('Created image preview completed');
-          //       this.previewImageBuffer = bufferImage;
-          //       resolve(null);
-          //     });
+  async resizeFaceImages(faceSize: number) {
+    const resizeProcess = this.facesImage.map((faceImage) =>
+      sharp(faceImage.buffer)
+        .resize({
+          width: faceSize,
+          height: faceSize,
+        })
+        .toBuffer(),
+    );
+    const resized = await Promise.all(resizeProcess);
+    return resized.map((imageBuffer, index) => ({
+      buffer: imageBuffer,
+      filename: this.facesImage[index].filename,
+    }));
+  }
+  async createPreviewImage() {
+    const resizeImageProcess = this.facesImage.map((faceImage) => {
+      return sharp(faceImage.buffer)
+        .resize({
+          width: TILE_SIZE,
+          height: TILE_SIZE,
+        })
+        .webp()
+        .toBuffer();
+    });
+    const buffers = await Promise.all(resizeImageProcess);
+    buffers.forEach((imgBuffer, index) => {
+      const faceImageName = getFaceNameByFileName(
+        this.facesImage[index].filename,
+      );
+      const faceName = `${faceImageName}.webp`;
+      const pathSaved = getPathSaved(faceName);
+      writeFile(pathSaved, imgBuffer, {}, (e) => {
+        if (e) {
+          console.log('error: ', e);
+        } else {
+          console.log('saved: ', pathSaved);
         }
-      };
-
-      this.facesImage.map((faceImage) => {
-        sharp(faceImage.buffer)
-          .resize({
-            width: TILE_SIZE,
-            height: TILE_SIZE,
-          })
-          .toBuffer()
-          .then((resultBuffer) => {
-            onResized(resultBuffer, faceImage);
-          })
-          .catch(reject);
       });
     });
   }
 
-  createAndUpload360PreviewImage() {
-    return new Promise(async (resolve, reject) => {
-      try {
-        this.logger.log(`Create 360 preview`);
-        // const response = await this.axios.get(this.panoramaPreviewImgUrlRaw, {
-        //   responseType: 'arraybuffer',
-        // });
-        // const fileData: Buffer = response.data;
-        // const previewBuffer = await sharp(fileData)
-        //   .resize({ width: 800, height: 418 })
-        //   .webp()
-        //   .toBuffer();
-        // const fileName = `panorama_${this.roomId}_preview.webp`;
-        this.logger.log(`Upload 360 preview`);
-        // this.panoramaPreviewImgUrl = await this.uploadFile(
-        //   previewBuffer,
-        //   fileName,
-        // );
-        this.logger.log(`Upload 360 preview completed`);
-        resolve(null);
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
-  uploadPreviewImage() {
-    return new Promise(async (resolve, reject) => {
-      try {
-        this.previewImageUrl = await this.uploadFile(
-          this.previewImageBuffer,
-          `${this.roomId}_preview.webp`,
-        );
-        this.previewImageBuffer = null;
-        this.logger.log('Upload preview Image completed.');
-        resolve(null);
-      } catch (e) {
-        reject(e);
-      }
-    });
-  }
-
-  createTitleImages() {
-    // const imagesOneRow = this.faceSize / this.titleSize;
-    const imagesOneRow = 2;
+  async createTitleImages({
+    faceSize,
+    layerIndex,
+    facesImages,
+  }: {
+    faceSize: number;
+    layerIndex: number;
+    facesImages: ICubeImage[];
+  }) {
+    const imagesOneRow = faceSize / TILE_SIZE;
     const titleIndexMax = imagesOneRow - 1;
     this.titleImagesCount = imagesOneRow * imagesOneRow * 6;
     return new Promise((resolve, reject) => {
-      const onUploadImageCompleted = (imageUrl: string) => {
-        this.titleImageUrls.push(imageUrl);
+      const onUploadImageCompleted = () => {
+        this.titleImageUrls.push('');
         const isUploadAllTitleImages =
           this.titleImageUrls.length === this.titleImagesCount;
         if (isUploadAllTitleImages) resolve(null);
       };
-      this.facesImage.forEach((faceImage) => {
+      facesImages.forEach((faceImage) => {
         const faceImageName = getFaceNameByFileName(faceImage.filename);
         try {
           for (
@@ -242,22 +194,21 @@ export class CutImageService {
               titleYIndex++
             ) {
               const cropConfig = {
-                top: titleYIndex * this.titleSize,
-                left: titleXIndex * this.titleSize,
-                height: this.titleSize,
-                width: this.titleSize,
+                top: titleYIndex * TILE_SIZE,
+                left: titleXIndex * TILE_SIZE,
+                height: TILE_SIZE,
+                width: TILE_SIZE,
               };
               sharp(faceImage.buffer)
                 .extract(cropConfig)
                 .webp()
                 .toBuffer()
                 .then((data: Buffer) => {
-                  const fileName = `${faceImageName}_${titleXIndex}_${titleYIndex}_${this.roomId}.webp`;
-                  this.uploadFile(data, fileName)
-                    .then((fileUrl) => {
-                      onUploadImageCompleted(fileUrl);
-                    })
-                    .catch(reject);
+                  const fileName = `${faceImageName}_${layerIndex}_${titleXIndex}_${titleYIndex}.webp`;
+                  const savedPath = getPathSaved(fileName);
+                  writeFile(savedPath, data, () => {
+                    onUploadImageCompleted();
+                  });
                 })
                 .catch((e) => {
                   reject(e);
@@ -270,18 +221,6 @@ export class CutImageService {
         }
       });
     });
-  }
-
-  createFaceSizeTitleSize() {
-    this.faceSize = this.originalWidth / 4;
-    let titleSize = this.faceSize;
-    const smallTitleSize = titleSize / 2;
-    if (smallTitleSize === Math.ceil(smallTitleSize))
-      titleSize = smallTitleSize;
-    this.titleSize = titleSize;
-    this.logger.log(
-      `Create Face size ${this.faceSize}px, Title size ${this.titleSize}px completed`,
-    );
   }
 
   getImageJson() {
@@ -335,14 +274,5 @@ export class CutImageService {
       }
     }
     log.Description = JSON.stringify(description);
-    this.axios
-      .post(process.env.API_SEND_EMAIL_INFORM_ERROR, log)
-      .then(() => {
-        this.logger.log('Send email inform error success.');
-      })
-      .catch((e) => {
-        this.logger.error('Send email inform error fail');
-        this.logger.error(e);
-      });
   }
 }
