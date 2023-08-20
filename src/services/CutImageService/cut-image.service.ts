@@ -5,7 +5,6 @@ import { convertImage } from 'src/libs/panorama-to-cubemap';
 import { ICubeImage } from 'src/models/ICubeImage';
 import { getFaceNameByFileName } from 'src/utils';
 import * as sharp from 'sharp';
-import * as FormData from 'form-data';
 import { IErrorLog } from 'src/models/IErrorLog';
 import { writeFile, existsSync, mkdirSync } from 'fs';
 import { join } from 'path';
@@ -17,6 +16,12 @@ if (!existsSync(IMAGE_FOLDER)) {
 }
 const getPathSaved = (fileName: string) =>
   join(...FOLDER_PATHS, 'images', fileName);
+interface Options {
+  imageUrlRaw: string;
+  titleHeight: number;
+  imageResultHeight: number;
+  previewImageHeight: number;
+}
 export class CutImageService {
   logger: LoggerService;
   axios: AxiosService;
@@ -35,25 +40,32 @@ export class CutImageService {
   previewImageUrl: string;
   titleImageUrls: string[] = [];
   titleImagesCount: number;
-  apiUrl: string;
   panoramaPreviewImgUrlRaw: string;
   panoramaPreviewImgUrl: string;
   folderFilePath: string;
-  constructor(
-    imageUrlRaw: string,
-    roomId: string | number,
-    apiUrl: string,
-    panoramaPreviewImgUrlRaw?: string,
-    folderFilePath?: string,
-  ) {
-    this.roomId = roomId;
+  fileName: string;
+  imageResultHeight: number;
+  titleHeight: number;
+  previewImageHeight: number;
+  constructor({
+    imageUrlRaw,
+    imageResultHeight,
+    titleHeight,
+    previewImageHeight,
+  }: Options) {
+    this.fileName = imageUrlRaw
+      .split('/')
+      .pop()
+      .split('.')
+      .slice(0, -1)
+      .join('');
+    this.previewImageHeight = previewImageHeight;
+    this.imageResultHeight = imageResultHeight;
+    this.titleHeight = titleHeight;
     this.imageUrlRaw = imageUrlRaw;
     this.imageUrl = encodeURI(imageUrlRaw);
-    this.logger = LoggerService.createLogger(`Room-${roomId}`);
+    this.logger = LoggerService.createLogger(this.fileName);
     this.axios = new AxiosService(this.logger);
-    this.apiUrl = apiUrl;
-    this.panoramaPreviewImgUrlRaw = panoramaPreviewImgUrlRaw;
-    this.folderFilePath = folderFilePath;
   }
   options = {
     rotation: 360,
@@ -80,19 +92,13 @@ export class CutImageService {
         this.originalHeight = dimension.height;
         this.isImageRatioCorrect();
         this.facesImage = await convertImage(fileData, this.options);
-        this.facesImage1024 = await this.resizeFaceImages(1024);
-        this.facesImage2048 = await this.resizeFaceImages(2048);
+        const result = await this.resizeFaceImages(this.imageResultHeight);
         this.logger.log(`Convert panaroma to cube image completed`);
         await this.createPreviewImage();
         await this.createTitleImages({
-          facesImages: this.facesImage1024,
+          facesImages: result,
           layerIndex: 1,
-          faceSize: 1024,
-        });
-        await this.createTitleImages({
-          facesImages: this.facesImage2048,
-          layerIndex: 2,
-          faceSize: 2048,
+          faceSize: this.imageResultHeight,
         });
         const currentTime = new Date();
         this.logger.log(
@@ -138,8 +144,8 @@ export class CutImageService {
     const resizeImageProcess = this.facesImage.map((faceImage) => {
       return sharp(faceImage.buffer)
         .resize({
-          width: TILE_SIZE,
-          height: TILE_SIZE,
+          width: this.previewImageHeight,
+          height: this.previewImageHeight,
         })
         .webp()
         .toBuffer();
@@ -170,7 +176,7 @@ export class CutImageService {
     layerIndex: number;
     facesImages: ICubeImage[];
   }) {
-    const imagesOneRow = faceSize / TILE_SIZE;
+    const imagesOneRow = faceSize / this.titleHeight;
     const titleIndexMax = imagesOneRow - 1;
     this.titleImagesCount = imagesOneRow * imagesOneRow * 6;
     return new Promise((resolve, reject) => {
@@ -194,10 +200,10 @@ export class CutImageService {
               titleYIndex++
             ) {
               const cropConfig = {
-                top: titleYIndex * TILE_SIZE,
-                left: titleXIndex * TILE_SIZE,
-                height: TILE_SIZE,
-                width: TILE_SIZE,
+                top: titleYIndex * this.titleHeight,
+                left: titleXIndex * this.titleHeight,
+                height: this.titleHeight,
+                width: this.titleHeight,
               };
               sharp(faceImage.buffer)
                 .extract(cropConfig)
@@ -235,21 +241,6 @@ export class CutImageService {
     };
 
     return JSON.stringify(imageJson);
-  }
-
-  uploadFile(fileData: Buffer, fileName: string): Promise<string> {
-    return new Promise((resolve, reject) => {
-      const formData = new FormData();
-      formData.append('file', fileData, fileName);
-      if (this.folderFilePath)
-        formData.append('file_path', this.folderFilePath);
-      this.axios
-        .post(this.apiUrl, formData)
-        .then((res) => {
-          resolve(res.data.url);
-        })
-        .catch(reject);
-    });
   }
 
   sendEmailInformError(error: IErrorLog) {

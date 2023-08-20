@@ -4,25 +4,20 @@ export class DTORoom {
   @IsNotEmpty()
   @IsNumber()
   @ApiProperty()
-  readonly id: number;
+  readonly imageResultHeight: number;
+
+  @IsNotEmpty()
+  @IsNumber()
+  @ApiProperty()
+  readonly titleHeight: number;
+
+  @IsNotEmpty()
+  @IsNumber()
+  @ApiProperty()
+  readonly previewImageHeight: number;
 
   @IsNotEmpty()
   @IsString()
   @ApiProperty()
-  readonly panorama_360_url: string;
-
-  @IsNotEmpty()
-  @IsString()
-  @ApiProperty()
-  readonly upload_image_api_url: string;
-
-  @IsNotEmpty()
-  @IsString()
-  @ApiProperty()
-  readonly panorama_url_preview: string;
-
-  @IsOptional()
-  @IsString()
-  @ApiProperty()
-  readonly file_path: string;
+  readonly imageUrlRaw: string;
 }
